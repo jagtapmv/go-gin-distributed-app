@@ -1,57 +1,45 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
-	"net/http"
-	"time"
+	"context"
+	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/xid"
+	handler "github.com/jagtapmv/go-gin-distributed-app/handlers"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
-type Recipe struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Tags         []string  `json:"tags"`
-	Ingredients  []string  `json:"ingredients"`
-	Instructions []string  `json:"instructions"`
-	PublishedAt  time.Time `json:"publishedAt"`
-}
-
-var recipes []Recipe
+var recipeHandler *handler.RecipeHandler
 
 func init() {
-	recipes = make([]Recipe, 0)
-	file, _ := ioutil.ReadFile("recipes.json")
-	_ = json.Unmarshal(file, &recipes)
-}
-
-func NewRecipeHandler(ctx *gin.Context) {
-	var recipe Recipe
-
-	if err := ctx.ShouldBindJSON(&recipe); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"Error": err.Error(),
-		})
-		return
+	ctx := context.Background()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+	if err != nil {
+		log.Fatal(err)
 	}
+	//To make connection we have to pass MONGO_URI="mongodb://admin:passwd@localhost:27017" as env var to go run command as:
+	//MONGO_URI="mongodb://admin:passwd@localhost:27017" go run main.go
+	if er := client.Ping(context.TODO(), readpref.Primary()); er != nil {
+		log.Fatal(er)
+	}
+	log.Println("Connected to MongoDB")
+	collection := client.Database(os.Getenv("MONGO_DB")).Collection("recipes")
 
-	recipe.ID = xid.New().String()
-	recipe.PublishedAt = time.Now()
-	recipes = append(recipes, recipe)
-	ctx.JSON(http.StatusOK, recipe)
-}
-
-func ListRecipeHendler(ctx *gin.Context) {
-	ctx.JSON(http.StatusOK, recipes)
+	//Passing context and collectiobn to handler
+	recipeHandler = handler.NewRecipeHandler(ctx, collection)
 }
 
 func main() {
 	router := gin.Default()
 
-	router.POST("/recipes", NewRecipeHandler)
-	router.GET("/recipes", ListRecipeHendler)
+	router.POST("/recipes", recipeHandler.NewRecipeHandler)
+	router.GET("/recipes", recipeHandler.ListRecipeHendler)
+	router.PUT("/recipes/:id", recipeHandler.UpdateRecipeHandler)
+	router.DELETE("/recipes/:id", recipeHandler.DeleteRecipeHandler)
+	router.GET("/recipes/search", recipeHandler.SearchRecipeHandler)
 
 	router.Run()
 }
